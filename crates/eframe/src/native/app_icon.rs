@@ -80,8 +80,8 @@ fn set_title_and_icon(_title: &str, _icon_data: Option<&IconData>) -> AppIconSta
 #[expect(unsafe_code)]
 fn set_app_icon_windows(icon_data: &IconData) -> AppIconStatus {
     use crate::icon_data::IconDataExt as _;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
+    use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+    use windows::Win32::UI::WindowsAndMessaging::{
         CreateIconFromResourceEx, GetSystemMetrics, HICON, ICON_BIG, ICON_SMALL, LR_DEFAULTCOLOR,
         SM_CXICON, SM_CXSMICON, SendMessageW, WM_SETICON,
     };
@@ -97,7 +97,7 @@ fn set_app_icon_windows(icon_data: &IconData) -> AppIconStatus {
 
     // SAFETY: WinApi function without side-effects.
     let window_handle = unsafe { GetActiveWindow() };
-    if window_handle.is_null() {
+    if window_handle.is_invalid() {
         // The Window isn't available yet. Try again later!
         return AppIconStatus::NotSetTryAgain;
     }
@@ -123,21 +123,20 @@ fn set_app_icon_windows(icon_data: &IconData) -> AppIconStatus {
             )
             .is_err()
         {
-            return std::ptr::null_mut();
+            return windows::Win32::UI::WindowsAndMessaging::HICON(std::ptr::null_mut());
         }
 
         // SAFETY: Creating an HICON which should be readonly on our data.
         unsafe {
             CreateIconFromResourceEx(
-                image_scaled_bytes.as_mut_ptr(),
-                image_scaled_bytes.len() as u32,
-                1,           // Means this is an icon, not a cursor.
+                &image_scaled_bytes,
+                true,           // Means this is an icon, not a cursor.
                 0x00030000,  // Version number of the HICON
                 target_size, // Note that this method can scale, but it does so *very* poorly. So let's avoid that!
                 target_size,
                 LR_DEFAULTCOLOR,
             )
-        }
+        }.expect("Unable to create icon from resource")
     }
 
     let unscaled_image = match icon_data.to_image() {
@@ -158,7 +157,7 @@ fn set_app_icon_windows(icon_data: &IconData) -> AppIconStatus {
         // SAFETY: WinAPI getter function with no known side effects.
         let icon_size_big = unsafe { GetSystemMetrics(SM_CXICON) };
         let icon_big = create_hicon_with_scale(&unscaled_image, icon_size_big);
-        if icon_big.is_null() {
+        if icon_big.is_invalid() {
             log::warn!("Failed to create HICON (for big icon) from embedded png data.");
             return AppIconStatus::NotSetIgnored; // We could try independently with the small icon but what's the point, it would look bad!
         } else {
@@ -167,8 +166,8 @@ fn set_app_icon_windows(icon_data: &IconData) -> AppIconStatus {
                 SendMessageW(
                     window_handle,
                     WM_SETICON,
-                    ICON_BIG as usize,
-                    icon_big as isize,
+                    Some(windows::Win32::Foundation::WPARAM(ICON_BIG as usize)),
+                    Some(windows::Win32::Foundation::LPARAM(icon_big.0 as _)),
                 );
             }
         }
@@ -177,7 +176,7 @@ fn set_app_icon_windows(icon_data: &IconData) -> AppIconStatus {
         // SAFETY: WinAPI getter function with no known side effects.
         let icon_size_small = unsafe { GetSystemMetrics(SM_CXSMICON) };
         let icon_small = create_hicon_with_scale(&unscaled_image, icon_size_small);
-        if icon_small.is_null() {
+        if icon_small.is_invalid() {
             log::warn!("Failed to create HICON (for small icon) from embedded png data.");
             return AppIconStatus::NotSetIgnored;
         } else {
@@ -186,8 +185,8 @@ fn set_app_icon_windows(icon_data: &IconData) -> AppIconStatus {
                 SendMessageW(
                     window_handle,
                     WM_SETICON,
-                    ICON_SMALL as usize,
-                    icon_small as isize,
+                    Some(windows::Win32::Foundation::WPARAM(ICON_SMALL as usize)),
+                    Some(windows::Win32::Foundation::LPARAM(icon_small.0 as _)),
                 );
             }
         }

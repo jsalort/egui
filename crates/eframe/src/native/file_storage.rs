@@ -46,46 +46,43 @@ pub fn storage_dir(app_id: &str) -> Option<PathBuf> {
 fn roaming_appdata() -> Option<PathBuf> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt as _;
-    use std::ptr;
     use std::slice;
 
-    use windows_sys::Win32::Foundation::S_OK;
-    use windows_sys::Win32::System::Com::CoTaskMemFree;
-    use windows_sys::Win32::UI::Shell::{
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{
         FOLDERID_RoamingAppData, KF_FLAG_DONT_VERIFY, SHGetKnownFolderPath,
     };
 
     unsafe extern "C" {
         fn wcslen(buf: *const u16) -> usize;
     }
-    let mut path_raw = ptr::null_mut();
 
     // SAFETY: SHGetKnownFolderPath allocates for us, we don't pass any pointers to it.
     // See https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetknownfolderpath
-    let result = unsafe {
+    match unsafe {
         SHGetKnownFolderPath(
             &FOLDERID_RoamingAppData,
-            KF_FLAG_DONT_VERIFY as u32,
-            std::ptr::null_mut(),
-            &mut path_raw,
+            KF_FLAG_DONT_VERIFY,
+            None,
         )
-    };
+    } {
+        Ok(windows::core::PWSTR(path_raw)) => {
+            // SAFETY: SHGetKnownFolderPath indicated success and is supposed to allocate a null-terminated string for us.
+            let path_slice = unsafe { slice::from_raw_parts(path_raw, wcslen(path_raw)) };
+            let path = Some(PathBuf::from(OsString::from_wide(path_slice)));
+            
+            // SAFETY:
+            // This memory got allocated by SHGetKnownFolderPath, we didn't touch anything in the process.
+            // A null ptr is a no-op for `CoTaskMemFree`, so in case this failed we're still good.
+            // https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cotaskmemfree
+            unsafe { CoTaskMemFree(Some(path_raw.cast())) };
 
-    let path = if result == S_OK {
-        // SAFETY: SHGetKnownFolderPath indicated success and is supposed to allocate a null-terminated string for us.
-        let path_slice = unsafe { slice::from_raw_parts(path_raw, wcslen(path_raw)) };
-        Some(PathBuf::from(OsString::from_wide(path_slice)))
-    } else {
-        None
-    };
+            path
+        }
+        Err(_) => None,
+    }
 
-    // SAFETY:
-    // This memory got allocated by SHGetKnownFolderPath, we didn't touch anything in the process.
-    // A null ptr is a no-op for `CoTaskMemFree`, so in case this failed we're still good.
-    // https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cotaskmemfree
-    unsafe { CoTaskMemFree(path_raw.cast()) };
-
-    path
+    
 }
 
 #[cfg(any(not(windows), target_vendor = "uwp"))]
